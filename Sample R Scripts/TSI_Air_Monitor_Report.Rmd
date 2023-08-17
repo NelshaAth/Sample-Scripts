@@ -1,0 +1,457 @@
+---
+title: "TSI_AQ_Adv Data Cleaning"
+author: "Nelsha Athauda"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r Here, include=FALSE, message=F}
+here::i_am("AQ Monitors/Script/TSI_Air_Monitor_Report.Rmd")
+knitr::opts_knit$set(root.dir = here::here())
+
+library(here)
+```
+
+```{r Load packages, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(lubridate)
+```
+
+# 8/17 Update: Removed participant identifiers
+
+```{r Pull Data 81432231023, include=FALSE, echo=F}
+setwd(here("AQ Monitors", "Data", "Aggregated_SD_Card_Data"))
+
+TSI_81432223001__1021 <- readRDS("TSI_81432223001.RDS")
+TSI_81432223002__1007 <- readRDS("TSI_81432223002.RDS")
+TSI_81432223003__1026 <- readRDS("TSI_81432223003.RDS")
+TSI_81432223004__1002 <- readRDS("TSI_81432223004.RDS")
+TSI_81432223005__1011 <- readRDS("TSI_81432223005.RDS")
+TSI_81432223006__1005 <- readRDS("TSI_81432223006.RDS")
+TSI_81432223008__1020_1019 <- readRDS("TSI_81432223008.RDS")
+TSI_81432223009__1001 <- readRDS("TSI_81432223009.RDS")
+TSI_81432223010__1022 <- readRDS("TSI_81432223010.RDS")
+TSI_81432223011_1025 <- readRDS("TSI_81432223011.RDS")
+TSI_81432223012__1016 <- readRDS("TSI_81432223012.RDS")
+TSI_81432223018__1008 <- readRDS("TSI_81432223018.RDS")
+TSI_81432223019__1006 <- readRDS("TSI_81432223019.RDS")
+TSI_81432223021__1013 <- readRDS("TSI_81432223021.RDS")
+TSI_81432223022__1018 <- readRDS("TSI_81432223022.RDS")
+TSI_81432223027 <- readRDS("TSI_81432223027.RDS") 
+TSI_81432223028__1004 <- readRDS("TSI_81432223028.RDS")
+TSI_81432223029__1003_1010 <- readRDS("TSI_81432223029.RDS")
+TSI_81432223030__1014_1017 <- readRDS("TSI_81432223030.RDS")
+TSI_81432231001__1027 <- readRDS("TSI_81432231001.RDS")
+TSI_81432231023__1024 <- readRDS("TSI_81432231023.RDS")
+TSI_81432306005__shoulder <- readRDS("TSI_81432306005.RDS") # 1023 shoulder (Shared monitor)
+```
+
+
+```{r Remove data before 2023, echo=F}
+DFnames <- ls()[sapply(ls(), function(x) is.data.frame(get(x)))]
+```
+
+
+```{r Remove any data before 2023, echo=F}
+# Converting DateTime to usable Dates and only keeping data past 01/01/2023
+for (i in seq_along(DFnames)) {
+  df <- get(DFnames[i])
+  df$Date <- 0
+  df$Date <- as.Date(df$Timestamp) 
+  subset_df <- subset(df, Date > "2022-12-01") 
+  subset_df <- subset_df[-1,] 
+  rownames(subset_df) <- NULL
+  assign(DFnames[i], subset_df) 
+}
+
+DFnames <- DFnames[! DFnames %in% c("TSI_81432231023__1024", "TSI_81432223027", "TSI_81432306005__shoulder")]
+```
+
+
+```{r Custom Alterations, echo=F}
+# This participant received a replacement monitor sent from TSI with testing data from December
+TSI_81432231023__1024 <- subset(TSI_81432231023__1024, Date > "2022-12-30")
+
+# This participant received her monitor after 1023 returned it for her early peak season
+TSI_81432223027__1009 <- subset(TSI_81432223027, Date >= "2023-01-15")
+
+# This participant used two different monitors (1023)
+TSI_81432223027__peak <- subset(TSI_81432223027, Date < "2023-01-14")
+TSI_81432306005__1023 <- rbind(TSI_81432306005__shoulder, TSI_81432223027__peak)
+
+DFnames <- c(DFnames, "TSI_81432231023__1024", "TSI_81432223027__1009", "TSI_81432306005__1023")
+All_raw_DFs <- DFnames
+```
+
+# Create new AQI variable and assign values based on PM2.5 values
+```{r, echo=F}
+for (i in seq_along(All_raw_DFs)) {
+  subset_df <- get(All_raw_DFs[i]) 
+
+  if (nrow(subset_df) > 0) {
+    subset_df$AQI <- "UNKNOWN"
+    subset_df$PM2.5 <- as.numeric(subset_df$PM2.5) 
+    
+    if (!anyNA(subset_df$PM2.5)) {
+      subset_df$AQI[subset_df$PM2.5 <= 12] <- "Good"
+      subset_df$AQI[subset_df$PM2.5 > 12 & subset_df$PM2.5 <= 35.5] <- "Moderate"
+      subset_df$AQI[subset_df$PM2.5 > 35.5 & subset_df$PM2.5 <= 55.5] <- "Unhealthy for Sensitive Groups"
+      subset_df$AQI[subset_df$PM2.5 > 55.5 & subset_df$PM2.5 <= 150.5] <- "Unhealthy"
+      subset_df$AQI[subset_df$PM2.5 > 150.5 & subset_df$PM2.5 <= 250.5] <- "Very Unhealthy"
+      subset_df$AQI[subset_df$PM2.5 > 250.5] <- "Hazardous"
+    }
+  }
+  assign(All_raw_DFs[i], subset_df)
+}
+```
+
+# Page 1 Pie Chart Info
+These numbers are for the monitor's entire runtime, beginning from the first time participants plug them in.
+```{r, echo=FALSE}
+for (i in seq_along(All_raw_DFs)) {
+  df <- get(All_raw_DFs[i])  
+  aqi_count <- as.data.frame(table(df$AQI))
+  
+  dataset_name <- as.character(All_raw_DFs[i]) 
+  dataset_name <- substring(dataset_name, 5)
+  aqi_count$Monitor <- rep(dataset_name, nrow(aqi_count))
+  colnames(aqi_count) <- c("AQI", "AQI Frequency", "Monitor ID")
+  
+  cat("Dataset:", All_raw_DFs[i])
+  print(knitr::kable(aqi_count, align=rep('c', 3)))
+  cat("\n")
+}
+
+```
+
+# 8/17 Update: Removed participant identifiers
+```{r Subset by Peak Season Sampling Dates for each participant, include=FALSE}
+#Peak
+peak_date_ranges <- list(
+  TSI_81432223012__1016 = c("2023-01-26", "2023-02-01"), #  1016 - Updated 6/21
+  TSI_81432223019__1006 = c("2023-01-20", "2023-01-26"), #  1006
+  TSI_81432223027__1009 = c("2023-01-30", "2023-02-05"), #  1009
+  TSI_81432306005__1023 = c("2022-12-22", "2022-12-28"), #  1023 
+  TSI_81432223009__1001 = c("2023-01-18", "2023-01-24"), #  1001
+  TSI_81432223028__1004 = c("2023-01-20", "2023-01-26"), #  1004
+  TSI_81432223004__1002 = c("2023-01-17", "2023-01-24"), # 1002
+  TSI_81432223008__1020_1019 = c("2023-01-20", "2023-01-26"), #  1020 and 1019
+  TSI_81432223021__1013 = c("2023-01-26", "2023-02-01"), #  1013 - Updated 6/21
+  TSI_81432223029__1003_1010 = c("2023-01-22", "2023-01-28"), # 1003 and 1010
+  TSI_81432223001__1021 = c("2023-01-20", "2023-01-26"), #  1021
+  TSI_81432223002__1007 = c("2023-01-20", "2023-01-26"), #  1007
+  TSI_81432223003__1026 = c("2023-01-25", "2023-01-31"), #  1026 (Used her first sampling date)
+  TSI_81432223005__1011 = c("2023-01-19", "2023-01-25"), #  1011
+  TSI_81432223006__1005 = c("2023-01-21", "2023-01-27"), #  1005
+  TSI_81432223010__1022 = c("2023-01-17", "2023-01-23"), #  1022
+  TSI_81432223011_1025 = c("2023-01-20", "2023-01-26"), #  1025
+  TSI_81432223018__1008 = c("2023-01-19", "2023-01-25"), #  1008 - Updated 6/21
+  TSI_81432223022__1018 = c("2023-01-20", "2023-01-26"), #  1018
+  TSI_81432223030__1014_1017 = c("2023-01-22", "2023-01-28"), #  1014 and 1017 
+  TSI_81432231001__1027 = c("2023-01-24", "2023-01-30"), #  1027
+  TSI_81432231023__1024 = c("2023-01-17", "2023-01-23") #  1024
+)
+```
+
+```{r Peak Season Dataframes, echo=F}
+peak_DFs <- list() 
+for (df_name in names(peak_date_ranges)) {
+  df <- get(df_name) 
+
+  date_range <- peak_date_ranges[[df_name]] 
+  subset_df <- subset(df, Date >= date_range[1] & Date <= date_range[2])  
+  peak_df_name <- paste0("peak_", df_name)  
+
+  assign(peak_df_name, subset_df)  
+  peak_DFs[[peak_df_name]] <- subset_df
+}
+```
+
+
+```{r Subset by Shoulder Season Sampling Dates for each participant, include=FALSE}
+# Shoulder
+shoulder_date_ranges <- list(
+  TSI_81432223019__1006 = c("2023-04-11", "2023-04-17"), #  1006 - Updated 6/21
+  TSI_81432223027__1009 = c("2023-04-19", "2023-04-25"), #  1009
+  TSI_81432223009__1001 = c("2023-04-18", "2023-04-24"), #  1001
+  TSI_81432223028__1004 = c("2023-04-18", "2023-04-24"), #  1004
+  TSI_81432223004__1002 = c("2023-04-21", "2023-04-27"), #  1002 - Updated 6/21
+  TSI_81432223008__1020_1019 = c("2023-04-20", "2023-04-26"), #  1020 and 1019
+  TSI_81432223021__1013 = c("2023-04-18", "2023-04-24"), #  1013
+  TSI_81432223029__1003_1010 = c("2023-04-23", "2023-04-29"), # 1003 and 1010
+  TSI_81432223001__1021 = c("2023-04-23", "2023-04-29"), #  1021
+  TSI_81432223002__1007 = c("2023-05-11", "2023-05-17"), #  1007 # - Updated 6/21
+  TSI_81432223003__1026 = c("2023-04-26", "2023-05-02"), #  1026
+  TSI_81432223005__1011 = c("2023-04-20", "2023-04-26"), #  1011
+  TSI_81432223006__1005 = c("2023-04-20", "2023-04-26"), #  1005 - Updated 6/21
+  TSI_81432223010__1022 = c("2023-04-24", "2023-04-30"), #  1022
+  TSI_81432223011_1025 = c("2023-04-26", "2023-05-02"), # 1025
+  TSI_81432223018__1008 = c("2023-04-26", "2023-05-02"), #  1008
+  TSI_81432223022__1018 = c("2023-05-15", "2023-05-21"), #  1018
+  TSI_81432223030__1014_1017 = c("2023-04-24", "2023-04-30"), #  1014 and 1017 
+  TSI_81432231001__1027 = c("2023-04-25", "2023-05-01"), # 1027 
+  TSI_81432231023__1024 = c("2023-05-02", "2023-05-08"), #  1024
+  TSI_81432306005__1023 = c("2023-04-23", "2023-04-29") #  Shoulder - Updated 6/21
+)
+```
+
+```{r Shoulder Season Dataframes, echo=F}
+shoulder_DFs <- list()
+
+for (df_name in names(shoulder_date_ranges)) {
+  df <- get(df_name)
+  date_range <- shoulder_date_ranges[[df_name]]
+  
+  start_date <- as.Date(date_range[1], format = "%Y-%m-%d")
+  end_date <- as.Date(date_range[2], format = "%Y-%m-%d")
+  
+  subset_df <- df[df$Date >= start_date & df$Date <= end_date, ]
+  shoulder_df_name <- paste0("shoulder_", df_name)  
+  assign(shoulder_df_name, subset_df) 
+  shoulder_DFs[[shoulder_df_name]] <- subset_df 
+}
+```
+
+FLAG: 1026 with monitor ID 81432223003 only recorded for an hour. Do not process their shoulder season data.
+```{r Check dimensions of subsetted shoulder season weeks, eval=F, echo=F}
+for (df_name in names(shoulder_DFs)) {
+  df <- get(df_name)
+  df_dim <- dim(df)
+  print(paste("Dimensions of", df_name, ":", df_dim[1], "rows,", df_dim[2], "columns"))
+}
+```
+
+```{r, echo = FALSE}
+# Calculate daily average PM2.5 for peak_DFs
+peak_averages <- list()
+for (df_name in names(peak_DFs)) {
+  df <- peak_DFs[[df_name]]
+  daily_avg <- df %>%
+    mutate(Day = as.integer(as.Date(Date) - min(as.Date(Date))) + 1) %>%
+    group_by(Day) %>%
+    summarise(daily_avg_PM2.5 = mean(PM2.5))
+  peak_averages[[df_name]] <- daily_avg
+}
+
+# Calculate daily average PM2.5 for shoulder_DFs
+shoulder_averages <- list()
+for (df_name in names(shoulder_DFs)) {
+  df <- shoulder_DFs[[df_name]]
+  daily_avg <- df %>%
+    mutate(Day = as.integer(as.Date(Date) - min(as.Date(Date))) + 1) %>%
+    group_by(Day) %>%
+    summarise(daily_avg_PM2.5 = mean(PM2.5))
+  shoulder_averages[[df_name]] <- daily_avg
+}
+```
+
+\newpage
+# Average Daily PM2.5 for Peak Season for Page 3 Graph
+
+```{r, echo=F}
+# Generate tables for peak season dataframes
+for (df_name in names(peak_DFs)) {
+  df <- peak_DFs[[df_name]]
+  daily_avg <- agate(PM2.5 ~ Date, df, FUN = mean)
+  daily_avg$Day <- seq_along(daily_avg$Date)
+  daily_avg$PM2.5 <- round(daily_avg$PM2.5)
+  table_data <- daily_avg[, c("Day", "PM2.5")]
+  colnames(table_data) <- c("Day", "PM2.5")
+  table_data$Season <- "Peak"
+  table_data$Monitor <- substr(df_name, start = 22, stop = nchar(df_name))
+  
+  cat("DataFrame:", df_name)
+  print(knitr::kable(table_data, align=rep('c', 4)))
+  cat("\n")
+}
+```
+
+\newpage
+# Average Daily PM2.5 for Shoulder Season for Page 3 Graph
+
+```{r, echo=F}
+# Generate tables for shoulder season dataframes
+for (df_name in names(shoulder_DFs)) {
+  df <- shoulder_DFs[[df_name]]
+  daily_avg <- agate(PM2.5 ~ Date, df, FUN = mean)
+  daily_avg$Day <- seq_along(daily_avg$Date)
+  daily_avg$PM2.5 <- round(daily_avg$PM2.5)
+  table_data <- daily_avg[, c("Day", "PM2.5")]
+  colnames(table_data) <- c("Day", "PM2.5")
+  table_data$Season <- "Shoulder"
+  table_data$Monitor <- substr(df_name, start = 26, stop = nchar(df_name))
+  
+  # Print the table
+  cat("DataFrame:", df_name)
+  print(knitr::kable(table_data, align=rep('c', 4)))
+  cat("\n")
+}
+```
+
+\newpage
+# Page 4 Statistics
+
+###Percent of days within 'good' range for pm 2.5 - Peak
+```{r, echo=F}
+# Peak
+peak_DFs <- names(peak_DFs)
+
+for (df_name in peak_DFs) {
+  df <- get(df_name)
+  num_good <- sum(df$AQI == "Good") 
+  percent_good <- round((num_good / nrow(df) * 100), 2) 
+  cat(paste0("Percentage of 'Good' AQI observations in ", df_name, ": ", percent_good, "%\n"))  
+}
+```
+
+### Percent of days within 'good' range for pm 2.5 - Shoulder
+```{r, Page 4, echo=F}
+# Shoulder
+shoulder_DFs <- names(shoulder_DFs)
+
+for (df_name in shoulder_DFs) {
+  df <- get(df_name)
+  num_good <- sum(df$AQI == "Good")
+  percent_good <- round((num_good / nrow(df) * 100), 2) 
+  cat(paste0("Percentage of 'Good' AQI observations in ", df_name, ": ", percent_good, "%\n"))  
+}
+```
+
+\newpage
+### Highest recorded value
+```{r, echo=F}
+max_values <- c()
+
+for (df_name in DFnames) {
+  df <- get(df_name)
+  max_value <- max(df$PM2.5)
+  max_values <- c(max_values, max_value)
+}
+
+for (i in seq_along(max_values)) {
+  cat(paste0("Highest recorded PM2.5 value for ", All_raw_DFs[i], ": ", max_values[i], "\n"))
+}
+```
+
+### Number of Days AQI was above moderate
+```{r, echo=F}
+for (df_name in DFnames) {
+  df <- get(df_name)
+  daily_avg <- agate(PM2.5 ~ Date, df, FUN = function(x) {
+    sum(x > 55.5) / length(x)
+  })
+  num_exceed <- sum(daily_avg$PM2.5 > 0)  # count the number of days where PM2.5 exceeds 55.5
+  num_days <- nrow(daily_avg)
+  
+  shortened_df_name <- substr(df_name, start = 17, stop = nchar(df_name))
+  cat(paste0("Number of days with PM2.5 reaching 'Unhealthy' for ", shortened_df_name, ": ", num_exceed, " out of ", num_days, " days\n"))
+}
+```
+
+# Page 5: Peak Heating Season Graph
+* See 'Peak Season Plots' Folder
+
+```{r echo=FALSE, message=TRUE, eval=TRUE}
+for (df_name in names(peak_DFs)) {
+  try({
+    df <- get(df_name)
+    df$Timestamp <- as.POSIXct(df$Timestamp, format = "%Y-%m-%d %H:%M:%S")
+    df$Timestamp <- as.POSIXct(gsub(" AKST", "", df$Timestamp), format = "%Y-%m-%d %H:%M:%S")
+    title_suffix <- substr(df_name, nchar(df_name) - 3, nchar(df_name))
+
+    plot_peak <- ggplot(df, aes(x = Timestamp, y = PM2.5)) +
+      geom_line(color = "blue") +
+      scale_x_datetime(date_labels = "%m/%d/%Y", date_breaks = "1 day") +
+      scale_y_continuous(limits = c(0, max(df$PM2.5) + 10), expand = c(0, 0)) +
+      geom_hline(yintercept = 55.5, color = "red")  +
+      theme(panel.background = element_blank()) +
+      theme(plot.margin = margin(1, 1, 1, 1, "cm")) +
+    labs(title = paste("Peak Heating Season Data for Study ID: ", title_suffix),
+         y = expression(paste("PM2.5 ", mu*g/m^3)),
+         caption = "Note: Values above the red line are 'Unhealthy' according to outdoor air quality standards set by the EPA. \n If there is no red line, no values reached 'unhealthy'.")
+
+  plot_peak <- plot_peak + theme(plot.caption = element_text(hjust = 0))
+
+    ggsave(here("C:/Users/nrathauda/OneDrive - University of Alaska/CTR-IN - indoor wood smoke/AQ Monitors/Peak_Season_Plots", paste0(df_name, ".jpeg")), 
+           plot = plot_peak,
+           device = "jpeg",
+           dpi = 300,
+           width = 8,
+           height = 5)
+  })}
+
+```
+
+
+# Page 5: Shoulder Heating Season Graph
+* See 'Shoulder Season Plots' Folder
+
+```{r, echo=FALSE, warning=FALSE}
+for (df_name_shoulder in names(shoulder_DFs)) {
+  df <- get(df_name_shoulder)
+  df$Timestamp <- as.POSIXct(df$Timestamp, format = "%Y-%m-%d %H:%M:%S")
+  df$Timestamp <- as.POSIXct(gsub(" AKST", "", df$Timestamp), format = "%Y-%m-%d %H:%M:%S")
+  title_suffix <- substr(df_name_shoulder, nchar(df_name_shoulder) - 3, nchar(df_name_shoulder))
+
+  plot_shoulder <- ggplot(df, aes(x = Timestamp, y = PM2.5)) +
+    geom_line(color = "blue") +
+    scale_x_datetime(date_labels = "%m/%d/%Y", date_breaks = "1 day") +
+    scale_y_continuous(limits = c(0, max(df$PM2.5) + 10), expand = c(0, 0)) +
+    geom_hline(yintercept = 55.5, color = "red")  +
+    theme(panel.background = element_blank()) +
+    theme(plot.margin = margin(1, 1, 1, 1, "cm"))+
+    labs(title = paste("Shoulder Heating Season Data for Study ID: ", title_suffix),
+         y = expression(paste("PM2.5 ", mu*g/m^3)),
+         caption = "Note: Values above the red line are 'Unhealthy' according to outdoor air quality standards set by the EPA. \n If there is no red line, no values reached 'unhealthy'.")
+
+  plot_shoulder <- plot_shoulder + theme(plot.caption = element_text(hjust = 0))
+  
+  ggsave(here("AQ Monitors/Shoulder_Season_Plots", paste0(df_name_shoulder, ".jpeg")), 
+       plot = plot_shoulder, 
+       device = "jpeg", 
+       dpi = 300, 
+       width = 8, 
+       height = 5)}
+```
+
+
+Page 6: Additional data outside of sampling periods
+* See 'Total Runtime Plots' Folder
+
+```{r, echo=FALSE, warning=FALSE}
+for (df_name in All_raw_DFs) {
+  df <- get(df_name)
+  df$Timestamp <- as.POSIXct(df$Timestamp, format = "%Y-%m-%d %H:%M:%S")
+  df$Timestamp <- as.POSIXct(gsub(" AKST", "", df$Timestamp), format = "%Y-%m-%d %H:%M:%S")
+
+  df$Timestamp <- df$Timestamp
+  df$PM2.5 <- as.numeric(df$PM2.5)
+  title_suffix <- substr(df_name, nchar(df_name) - 3, nchar(df_name))
+
+
+plot <- ggplot(df, aes(x = Timestamp, y = PM2.5)) +
+    geom_line(color = "blue") +
+    scale_x_datetime(date_labels = "%m/%d/%Y", date_breaks = "14 days") +
+    scale_y_continuous(limits = c(0, max(df$PM2.5) + 10), expand = c(0, 0)) +
+    geom_hline(yintercept = 55.5, color = "red") +
+    theme(panel.background = element_blank()) +
+    theme(plot.margin = margin(1, 1, 1, 1, "cm")) +
+    labs(title = paste("All Monitor Data for Study ID: ", title_suffix),
+         y = expression(paste("PM2.5 ", mu*g/m^3)),
+         caption = "Note: Values above the red line are 'Unhealthy' according to outdoor air quality standards set by the EPA. \n If there is no red line, no values reached 'unhealthy'.")
+
+  plot <- plot + theme(plot.caption = element_text(hjust = 0))
+
+ggsave(here("AQ Monitors/Total Runtime Plots", paste0("Full_RunTime_", df_name, ".jpeg")),
+       plot = plot,
+       device = "jpeg",
+       dpi = 300,
+       width = 8,
+       height = 5)}
+```
+
